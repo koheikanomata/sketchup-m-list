@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body { font-family: -apple-system, sans-serif; padding: 8px; background: #f5f5f5; font-size: 10px; display: flex; flex-direction: column; }
+    h2 { margin: 0 0 8px 0; font-size: 12px; flex-shrink: 0; }
+    .toolbar { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; flex-shrink: 0; }
+    .btn { padding: 4px 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 10px; }
+    .btn-primary { background: #1a73e8; color: #fff; }
+    .btn-primary:hover { background: #1557b0; }
+    .list-wrap { background: #fff; border-radius: 8px; border: 1px solid #ddd; overflow: hidden; min-width: 100%; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .list-head-table { width: 100%; min-width: 0; border-collapse: collapse; background: #fafafa; font-size: 9px; color: #666; font-weight: 600; table-layout: fixed; flex-shrink: 0; }
+    .list-head-table th { padding: 4px 6px; text-align: left; }
+    .list-body { flex: 1 1 70%; min-height: 0; overflow-y: auto; overflow-x: auto; min-width: 0; }
+    .list-row { font-size: 10px; cursor: pointer; }
+    .list-row:hover { background: #f9f9f9; }
+    .list-row.selected { background: #e3f2fd; }
+    .list-row.highlight { background: #fff8e1; }
+    .list-row.selected.highlight { background: #e3f2fd; }
+    .list-row.child-row .item-cell { padding-left: 16px; }
+    .list-row-table { width: 100%; min-width: 0; border-collapse: collapse; table-layout: fixed; }
+    .list-row-table td { vertical-align: top; padding: 4px 6px; border-bottom: 1px solid #eee; }
+    .list-row .item-cell { width: 100%; cursor: pointer; }
+    .list-row .item-inner { display: flex; flex-direction: column; }
+    .list-row .item-row-top { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; width: 100%; }
+    .list-row .item-row-top .part-icon { flex: 0 0 18%; min-width: 0; display: flex; align-items: center; gap: 2px; }
+    .list-row .item-row-top .part-name { flex: 1 1 28%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-top .part-material { flex: 1 1 54%; min-width: 0; display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
+    .list-row .item-row-top.board-materials .part-icon { flex: 0 0 14%; }
+    .list-row .item-row-top.board-materials .part-name { flex: 1 1 22%; }
+    .list-row .item-row-top.board-materials .part-material { flex: 1 1 64%; gap: 2px; }
+    .list-row .item-row-top.board-materials .part-material-thickness { flex: 0 0 14%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-top.board-materials .part-material-base { flex: 1 1 43%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-top.board-materials .part-material-finish { flex: 1 1 43%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-bottom { display: flex; gap: 4px; align-items: center; width: 100%; }
+    .list-row .item-row-bottom .part-price { flex: 0 0 35%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-bottom .part-memo { flex: 1 1 45%; min-width: 0; display: flex; align-items: center; }
+    .list-row .item-row-bottom .part-icons { flex: 0 0 20%; min-width: 0; display: flex; gap: 2px; align-items: center; justify-content: flex-end; }
+    .list-row .field { display: flex; align-items: center; gap: 4px; width: 100%; }
+    .list-row .field label { color: #666; white-space: nowrap; flex-shrink: 0; }
+    .list-row .field input { flex: 1; min-width: 0; }
+    .expand-btn { width: 16px; height: 16px; border: none; background: transparent; cursor: pointer; font-size: 10px; padding: 0; color: #666; }
+    .children-block { display: none; padding-left: 12px; border-left: 2px solid #e0e0e0; margin-left: 6px; }
+    .children-block.expanded { display: block; }
+    .empty-msg { padding: 16px; text-align: center; color: #999; font-size: 10px; min-height: 280px; display: flex; align-items: center; justify-content: center; }
+    .icon-btn { width: 20px; height: 20px; border: none; background: transparent; cursor: pointer; border-radius: 3px; font-size: 11px; color: #666; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+    .icon-btn .calc-icon { width: 16px; height: 16px; object-fit: contain; }
+    .icon-btn:hover { background: #fee; color: #c00; }
+    .icon-btn.update-btn:hover { background: #e3f2fd; color: #1565c0; }
+    .icon-btn.reset-btn:hover { background: #fff3e0; color: #e65100; }
+    .shape-icon, .line-icon { display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; }
+    .line-icon { width: 14px; height: 14px; color: #555; }
+    .shape-icon { width: 14px; height: 14px; object-fit: contain; }
+    .list-row input, .list-row select { width: 100%; padding: 2px 4px; font-size: 10px; border: 1px solid #ddd; border-radius: 3px; }
+    .list-row .tag-badge { font-size: 9px; color: #666; background: #eee; padding: 1px 4px; border-radius: 3px; margin-right: 4px; flex-shrink: 0; max-width: 40px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .material-select { min-width: 0; width: 100%; max-width: 100%; }
+    .shape-select { min-width: 36px; max-width: 45px; font-size: 9px; }
+    .shape-dropdown { position: relative; display: inline-flex; }
+    .shape-dropdown-btn { padding: 1px; border: 1px solid #ddd; border-radius: 3px; background: #fff; cursor: pointer; display: flex; align-items: center; }
+    .shape-dropdown-btn:hover { border-color: #999; }
+    .shape-dropdown-menu { display: none; position: absolute; top: 100%; left: 0; margin-top: 2px; background: #fff; border: 1px solid #ddd; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); z-index: 100; padding: 2px; }
+    .shape-dropdown-menu.show { display: block; }
+    .shape-dropdown-opt { display: flex; align-items: center; justify-content: center; padding: 4px; cursor: pointer; border-radius: 3px; }
+    .shape-dropdown-opt:hover { background: #f0f0f0; }
+    .name-input { min-width: 0; width: 100%; }
+    .material-field { display: flex; align-items: center; gap: 2px; font-size: 9px; }
+    .material-field label { color: #666; white-space: nowrap; flex-shrink: 0; }
+    .save-dropdown { display: flex; position: relative; }
+    .save-dropdown .btn { border-radius: 6px 0 0 6px; }
+    .save-dropdown .btn-drop { padding: 4px 4px; border-radius: 0 4px 4px 0; margin-left: -1px; }
+    .dropdown-menu { display: none; position: absolute; top: 100%; left: 0; margin-top: 2px; background: #fff; border: 1px solid #ddd; border-radius: 4px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); z-index: 100; min-width: 90px; }
+    .dropdown-menu.show { display: block; }
+    .dropdown-menu a { display: block; padding: 6px 10px; font-size: 10px; color: #333; text-decoration: none; }
+    .dropdown-menu a:hover { background: #f5f5f5; }
+    .list-row.hidden-row { opacity: 0.5; background: #f5f5f5; }
+    .icon-btn.visibility-btn:hover { background: #e3f2fd; color: #1565c0; }
+    .info-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
+    .info-header:hover { color: #1565c0; }
+    .info-toggle { font-size: 9px; color: #999; transition: transform 0.2s; }
+    .info-toggle.collapsed { transform: rotate(-90deg); }
+    #statusBar { flex-shrink: 0; }
+    #infoWindow { flex: 0 1 30%; min-height: 80px; max-height: 45%; overflow: hidden; display: flex; flex-direction: column; }
+    #infoContent { flex: 1; min-height: 0; overflow-y: auto; transition: max-height 0.2s; }
+    #infoWindow.collapsed { flex: 0 0 auto; }
+    #infoWindow.collapsed #infoContent { max-height: 0; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <h2 id="panelTitle">M List v1.1.2 - リスト</h2>
+  <div class="toolbar">
+    <button class="btn" onclick="checkUpdate()" style="background:#f3e5f5;color:#7b1fa2;font-size:9px" title="オンラインで最新バージョンを確認">更新確認</button>
+    <button class="btn" onclick="syncFromModel()" style="background:#e3f2fd;color:#1565c0" title="モデルからリストを再構築">同期</button>
+    <div class="save-dropdown">
+      <button class="btn" onclick="saveProject();hideSaveMenu();" style="background:#1565c0;color:#fff" title="保存（新規 or 上書き）">保存</button>
+      <button class="btn btn-drop" onclick="toggleSaveMenu(event)" style="background:#1565c0;color:#fff" title="保存メニュー">&#9660;</button>
+      <div id="saveMenu" class="dropdown-menu">
+        <a href="#" onclick="saveProject();hideSaveMenu();return false">保存（新規 or 上書き）</a>
+        <a href="#" onclick="saveProjectAs();hideSaveMenu();return false">別名保存</a>
+        <a href="#" onclick="saveCsv();hideSaveMenu();return false">CSVのみ保存</a>
+      </div>
+    </div>
+    <button class="btn" onclick="loadCsvFromFile()" style="background:#fff3e0;color:#e65100" title="CSVを読み込み、リストに反映">CSV読み込み</button>
+    <button class="btn" onclick="reloadMaterialsCsv()" style="background:#e8f5e9;color:#2e7d32" title="プロジェクトフォルダ内の素材CSVを再読み込み">素材CSV更新</button>
+    <button class="btn" onclick="recalculateAndValidate()" style="background:#fff8e1;color:#f57c00" title="価格を再計算し、不整合を検出・警告">再計算</button>
+  </div>
+  <div class="list-wrap">
+    <table class="list-head-table" cellpadding="0" cellspacing="0">
+      <thead><tr>
+        <th>名前・材料 / 値段・メモ</th>
+      </tr></thead>
+    </table>
+    <div class="list-body" id="listBody">
+      <div class="empty-msg" id="emptyMsg">モデルに Group/Component がありません。モデルを作成するか、別のモデルを開いてください。</div>
+    </div>
+    <div id="statusBar" style="margin-top:6px;padding:4px;font-size:9px;color:#666;background:#eee;border-radius:3px;">—</div>
+    <div id="infoWindow" style="margin-top:6px;padding:6px;font-size:10px;background:#fafafa;border:1px solid #ddd;border-radius:4px;">
+      <div class="info-header" onclick="toggleInfoPanel()">
+        <span style="font-weight:600;color:#333;">選択項目の集計</span>
+        <span class="info-toggle" id="infoToggle">&#9660;</span>
+      </div>
+      <div id="infoContent" style="font-size:9px;color:#555;margin-top:4px;">リストの項目をタップして集計を表示</div>
+    </div>
+  </div>
+  <script>
+    var selectedIds = [];
+    var expandedIds = [];
+    var rawBeam = [];
+    var rawBoard = [];
+    var finishList = [];
+    var thicknessOptions = [];
+
+    function showStatus(msg) {
+      var el = document.getElementById('statusBar');
+      if (el) el.textContent = msg || '—';
+    }
+
+    function shapeIcon(st) {
+      var icons = { nested: 'icon_nested.png', beam: 'icon_beam.png', board: 'icon_board.png', freeform: 'icon_freeform.png', other: 'icon_other.png' };
+      var titles = { nested: '入れ子', beam: '棒', board: '面状', freeform: '自由形状', other: 'その他' };
+      var key = (st === 'nested' || st === 'beam' || st === 'board' || st === 'freeform') ? st : 'other';
+      return '<img src="icons/' + icons[key] + '" class="shape-icon" alt="' + titles[key] + '" title="' + titles[key] + '">';
+    }
+
+    function renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam) {
+      var body = document.getElementById('listBody');
+      var ids = (highlightIds || []).map(function(x) { return String(x); });
+      var expIds = (expandedIdsParam && expandedIdsParam.length > 0 ? expandedIdsParam : expandedIds).map(function(x) { return String(x); });
+      rawBeam = rawBeamOpts || [];
+      rawBoard = rawBoardOpts || [];
+      finishList = finishOpts || [];
+      thicknessOptions = thicknessOpts || [];
+
+      if (!items || items.length === 0) {
+        body.innerHTML = '<div class="empty-msg" id="emptyMsg">モデルに Group/Component がありません。モデルを作成するか、別のモデルを開いてください。</div>';
+        return;
+      }
+
+      function renderItem(it, isChild) {
+        var id = (it.id || '').toString();
+        var hl = ids.indexOf(id) >= 0 ? ' highlight' : '';
+        var sel = selectedIds.indexOf(id) >= 0 ? ' selected' : '';
+        var safeId = id.replace(/\\/g, '\\\\').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        var hasChildren = it.children && it.children.length > 0;
+        var expandSvg = '<span class="line-icon"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>';
+        var expandBtnCls = hasChildren ? 'expand-btn' + (expIds.indexOf(id) >= 0 ? ' expanded' : '') : '';
+        var expandBtn = hasChildren ? '<span onclick="event.stopPropagation()"><button class="' + expandBtnCls + '" data-id="' + safeId + '" onclick="toggleExpand(this)" title="展開">' + expandSvg + '</button></span>' : '<span style="width:16px;display:inline-block"></span>';
+        var st = it.shape_type || 'other';
+        var icon = shapeIcon(st);
+        var price = Math.floor(Number(it.price) || 0);
+        var name = (it.name || '').toString().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var memo = (it.memo || '').toString().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var tag = (it.tag || '').toString().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var tagHtml = tag ? '<span class="tag-badge" title="' + tag + '">' + tag + '</span>' : '';
+        var hidden = it.hidden ? true : false;
+        var rowClass = (isChild ? 'list-row child-row' : 'list-row') + hl + sel + (hidden ? ' hidden-row' : '');
+        var materialId = (it.material_id || '').toString();
+        var finishId = (it.finish_id || '').toString();
+        var thicknessMm = (it.thickness_mm || '').toString();
+        var materialName = (it.material_name || '').toString().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        var shapeDropdownHtml = '';
+        if (hasChildren) {
+          shapeDropdownHtml = '<span class="shape-dropdown" onclick="event.stopPropagation()"><span class="shape-dropdown-btn" title="入れ子は変更不可">' + shapeIcon('nested') + '</span></span>';
+        } else {
+          var shapeMenuId = 'shape-menu-' + safeId.replace(/[^a-zA-Z0-9]/g, '_');
+          var shapeOptsArr = [
+            { v: 'beam', l: '棒', i: shapeIcon('beam') },
+            { v: 'board', l: '面状', i: shapeIcon('board') },
+            { v: 'freeform', l: '自由形状', i: shapeIcon('freeform') },
+            { v: 'other', l: 'その他', i: shapeIcon('other') }
+          ];
+          var shapeMenuItems = shapeOptsArr.map(function(o) {
+            return '<div class="shape-dropdown-opt" data-id="' + safeId + '" data-val="' + o.v + '" onclick="selectShapeOption(this)" title="' + o.l + '">' + o.i + '</div>';
+          }).join('');
+          shapeDropdownHtml = '<span class="shape-dropdown" onclick="event.stopPropagation()"><button type="button" class="shape-dropdown-btn" data-id="' + safeId + '" onclick="event.stopPropagation();toggleShapeMenu(this)" title="形状を上書き">' + icon + '</button><div id="' + shapeMenuId + '" class="shape-dropdown-menu">' + shapeMenuItems + '</div></span>';
+        }
+
+        var materialPartHtml = '';
+        if (!hasChildren) {
+          if (st === 'beam') {
+            var beamOpts = rawBeam.map(function(r) { var label = (r.name || r.material_id || '').toString(); return '<option value="' + (r.material_id || '').toString().replace(/"/g, '&quot;') + '"' + (materialId === (r.material_id || '') ? ' selected' : '') + '>' + label.replace(/</g, '&lt;').replace(/"/g, '&quot;') + '</option>'; }).join('');
+            materialPartHtml = '<div class="part-material"><select class="material-select" data-id="' + safeId + '" data-field="material_id" onchange="updateMaterial(this)" title="角材・丸太など棒状の材料"><option value="">素材</option>' + beamOpts + '</select></div>';
+          } else if (st === 'board') {
+            var boardFiltered = thicknessMm ? rawBoard.filter(function(r) {
+              var rt = (r.thickness_mm != null ? r.thickness_mm : '').toString();
+              return rt === thicknessMm || (parseFloat(rt) === parseFloat(thicknessMm) && !isNaN(parseFloat(thicknessMm)));
+            }) : rawBoard;
+            var thickOpts = thicknessOptions.map(function(t) { return '<option value="' + (t || '').toString().replace(/"/g, '&quot;') + '"' + (thicknessMm === (t || '').toString() ? ' selected' : '') + '>' + (t || '').toString().replace(/</g, '&lt;') + ' mm</option>'; }).join('');
+            var boardOpts = boardFiltered.map(function(r) { var label = (r.name || r.material_id || '').toString(); return '<option value="' + (r.material_id || '').toString().replace(/"/g, '&quot;') + '"' + (materialId === (r.material_id || '') ? ' selected' : '') + '>' + label.replace(/</g, '&lt;').replace(/"/g, '&quot;') + '</option>'; }).join('');
+            var finOpts = finishList.map(function(r) { var label = (r.name || r.finish_id || '').toString(); return '<option value="' + (r.finish_id || '').toString().replace(/"/g, '&quot;') + '"' + (finishId === (r.finish_id || '') ? ' selected' : '') + '>' + label.replace(/</g, '&lt;').replace(/"/g, '&quot;') + '</option>'; }).join('');
+            materialPartHtml = '<div class="part-material-thickness"><select class="material-select" data-id="' + safeId + '" data-field="thickness_mm" onchange="updateThickness(this)" title="厚み"><option value="">厚み</option>' + thickOpts + '</select></div><div class="part-material-base"><select class="material-select" data-id="' + safeId + '" data-field="material_id" onchange="updateMaterial(this)" title="板材・合板など下地となる材料"><option value="">下地材</option>' + boardOpts + '</select></div><div class="part-material-finish"><select class="material-select" data-id="' + safeId + '" data-field="finish_id" onchange="updateFinish(this)" title="塗料・クロスなど表面仕上げの材料"><option value="">仕上材</option>' + finOpts + '</select></div>';
+          } else {
+            materialPartHtml = '<div class="part-material"><input type="text" value="' + materialName.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '" data-id="' + safeId + '" onblur="updateMaterialName(this)" placeholder="素材"></div>';
+          }
+        }
+
+        var rowBottomIcons = '';
+        if (!hasChildren && (st === 'beam' || st === 'board')) {
+          rowBottomIcons += '<button class="icon-btn reset-btn" data-id="' + safeId + '" onclick="event.stopPropagation(); resetPrice(this)" title="価格を計算値に戻す"><img src="icons/icon_calculator.png" class="calc-icon" alt="計算"></button>';
+        }
+        rowBottomIcons += '<button class="icon-btn visibility-btn" data-id="' + safeId + '" onclick="event.stopPropagation(); toggleVisibility(this)" title="' + (hidden ? '表示する' : '見積もりから外す（非表示）') + '">' + (hidden ? '&#128065;' : '&#128064;') + '</button>';
+
+        var rowTopClass = 'item-row-top' + (st === 'board' ? ' board-materials' : '');
+        var rowTop = '<div class="' + rowTopClass + '"><div class="part-icon">' + expandBtn + shapeDropdownHtml + tagHtml + '</div><div class="part-name"><input type="text" value="' + name + '" data-id="' + safeId + '" onblur="updateName(this)" placeholder="名前" class="name-input"></div>' + materialPartHtml + '</div>';
+        var rowBottom = '<div class="item-row-bottom"><div class="part-price"><div class="field" style="display:flex;align-items:center;gap:2px"><label>¥</label><input type="number" min="0" step="1" value="' + price + '" data-id="' + safeId + '" onblur="updatePrice(this)" placeholder="0"></div></div><div class="part-memo"><input type="text" value="' + memo.replace(/"/g, '&quot;').replace(/</g, '&lt;') + '" data-id="' + safeId + '" onblur="updateMemo(this)" placeholder="メモ" class="memo-input"></div><div class="part-icons">' + rowBottomIcons + '</div></div>';
+
+        var row = '<table class="list-row-table" cellpadding="0" cellspacing="0"><tbody><tr class="' + rowClass + '" data-id="' + safeId + '">';
+        row += '<td class="item-cell"><div class="item-inner">' + rowTop + rowBottom + '</div></td>';
+        row += '</tr></tbody></table>';
+        if (hasChildren) {
+          var childrenHtml = it.children.map(function(c) { return renderItem(c, true); }).join('');
+          var expCls = expIds.indexOf(id) >= 0 ? ' expanded' : '';
+          row += '<div class="children-block' + expCls + '">' + childrenHtml + '</div>';
+        }
+        return '<div class="item-block" data-id="' + safeId + '">' + row + '</div>';
+      }
+
+      var html = items.map(function(it) { return renderItem(it, false); }).join('');
+      body.innerHTML = html;
+    }
+
+    (function initListClickDelegation() {
+      var lb = document.getElementById('listBody');
+      if (!lb) return;
+      lb.addEventListener('click', function(evt) {
+        var row = evt.target.closest('tr.list-row');
+        if (!row) return;
+        if (evt.target.closest('.shape-dropdown, .expand-btn, .icon-btn, .dropdown-menu, .shape-dropdown-menu')) return;
+        var id = row.getAttribute('data-id');
+        if (id) onRowClick(evt, row);
+      });
+    })();
+
+    function toggleExpand(btn) {
+      var block = btn.closest('.item-block').querySelector('.children-block');
+      if (!block) return;
+      var id = btn.getAttribute('data-id');
+      if (id) {
+        var idx = expandedIds.indexOf(id);
+        if (idx >= 0) expandedIds.splice(idx, 1);
+        else expandedIds.push(id);
+      }
+      block.classList.toggle('expanded');
+      btn.classList.toggle('expanded');
+    }
+
+    function syncFromModel() {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.refresh_list === 'function') bridge.refresh_list('');
+        else alert('同期機能が利用できません');
+      } catch(e) { alert('接続エラー: ' + e); }
+    }
+
+    function loadCsvFromFile() {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.csv_load === 'function') bridge.csv_load();
+        else alert('CSV読み込み機能が利用できません');
+      } catch(e) { alert('接続エラー: ' + e); }
+    }
+
+    function reloadMaterialsCsv() {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.reload_materials_csv === 'function') bridge.reload_materials_csv();
+        else alert('素材CSV更新機能が利用できません');
+      } catch(e) { alert('接続エラー: ' + e); }
+    }
+
+    function recalculateAndValidate() {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.recalculate_and_validate === 'function') bridge.recalculate_and_validate('');
+        else alert('再計算機能が利用できません');
+      } catch(e) { alert('接続エラー: ' + e); }
+    }
+
+    function onRecalculateComplete(result) {
+      if (!result) return;
+      var fixed = result.fixed_count || 0;
+      var warnings = result.warnings || [];
+      var msg = '再計算が完了しました。\n';
+      if (fixed > 0) msg += '・' + fixed + ' 件の価格を更新しました。\n';
+      if (warnings.length > 0) {
+        msg += '\n【警告】' + warnings.length + ' 件:\n';
+        warnings.slice(0, 15).forEach(function(w) {
+          msg += '・' + (w.path || '') + ': ' + (w.msg || '') + '\n';
+        });
+        if (warnings.length > 15) msg += '… 他 ' + (warnings.length - 15) + ' 件\n';
+      } else if (fixed === 0) {
+        msg += '不整合は検出されませんでした。';
+      }
+      alert(msg);
+    }
+
+    function toggleSaveMenu(evt) {
+      evt.stopPropagation();
+      var menu = document.getElementById('saveMenu');
+      if (menu) menu.classList.toggle('show');
+    }
+
+    function hideSaveMenu() {
+      var menu = document.getElementById('saveMenu');
+      if (menu) menu.classList.remove('show');
+    }
+
+    document.addEventListener('click', function(e) {
+      if (!e.target.closest('.save-dropdown')) hideSaveMenu();
+      if (!e.target.closest('.shape-dropdown')) {
+        var menus = document.querySelectorAll('.shape-dropdown-menu.show');
+        for (var i = 0; i < menus.length; i++) menus[i].classList.remove('show');
+      }
+    });
+
+    function toggleInfoPanel() {
+      var w = document.getElementById('infoWindow');
+      var t = document.getElementById('infoToggle');
+      if (w && t) {
+        w.classList.toggle('collapsed');
+        t.classList.toggle('collapsed');
+      }
+    }
+
+    function onRowClick(evt, rowEl) {
+      var id = rowEl.getAttribute('data-id');
+      if (!id) return;
+      var t = evt && evt.target ? evt.target.tagName : '';
+      var isInputArea = t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA' || t === 'LABEL';
+      var multi = evt && (evt.ctrlKey || evt.metaKey);
+      var idx = selectedIds.indexOf(id);
+      if (isInputArea) {
+        if (idx < 0) selectedIds = [id];
+      } else if (multi) {
+        if (idx >= 0) selectedIds.splice(idx, 1);
+        else selectedIds.push(id);
+      } else {
+        selectedIds = idx >= 0 && selectedIds.length === 1 ? [] : [id];
+      }
+      updateSelectionVisual();
+      fetchSelectionStats();
+      if (isInputArea) return;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.zoom_to_item === 'function') {
+          bridge.zoom_to_item(JSON.stringify({ id: id, selectedIds: selectedIds }));
+        }
+      } catch(e) {}
+    }
+
+    function updateSelectionVisual() {
+      var rows = document.querySelectorAll('tr.list-row');
+      for (var i = 0; i < rows.length; i++) {
+        var rid = rows[i].getAttribute('data-id');
+        if (selectedIds.indexOf(rid) >= 0) rows[i].classList.add('selected');
+        else rows[i].classList.remove('selected');
+      }
+    }
+
+    function fetchSelectionStats() {
+      if (selectedIds.length === 0) {
+        showInfoContent(null);
+        return;
+      }
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.get_selection_stats === 'function') {
+          bridge.get_selection_stats(JSON.stringify(selectedIds));
+        } else {
+          showInfoContent({ beam_count: 0, beam_total_mm: 0, board_count: 0, board_area_mm2: 0 });
+        }
+      } catch(e) {
+        showInfoContent({ beam_count: 0, beam_total_mm: 0, board_count: 0, board_area_mm2: 0 });
+      }
+    }
+
+    function onSelectionStatsUpdated(stats) {
+      showInfoContent(stats);
+    }
+
+    function showInfoContent(stats) {
+      var el = document.getElementById('infoContent');
+      if (!el) return;
+      if (!stats || selectedIds.length === 0) {
+        el.innerHTML = 'リストの項目をタップして集計を表示<br><small>名前・価格・素材欄などどこでもOK / Ctrl+クリックで複数選択</small>';
+        return;
+      }
+      var html = '';
+      var beamTotalM = ((stats.beam_total_mm || 0) / 1000).toFixed(2);
+      var boardAreaM2 = (stats.board_area_mm2 || 0) / 1000000;
+      html += '<strong>■ 最終サイズ・面積</strong><br>';
+      var b = stats.bounds_mm || {};
+      if (b.width_mm != null && b.height_mm != null && b.depth_mm != null) {
+        html += '全体: 幅 ' + (b.width_mm || 0) + ' × 高さ ' + (b.height_mm || 0) + ' × 奥行 ' + (b.depth_mm || 0) + ' mm<br>';
+      }
+      html += '棒: ' + (stats.beam_count || 0) + ' 本 / 合計 ' + beamTotalM + ' m (' + (stats.beam_total_mm || 0) + ' mm)<br>';
+      var boardSizes = stats.board_sizes || {};
+      var boardSizeStrs = Object.keys(boardSizes).sort().map(function(k) { return k + ': ' + boardSizes[k] + '枚'; });
+      html += '面状: ' + (stats.board_count || 0) + ' 枚' + (boardSizeStrs.length > 0 ? ' / ' + boardSizeStrs.join(', ') : '') + '<br>';
+      var beamSpecs = stats.beam_specs || [];
+      if (beamSpecs.length > 0) {
+        html += '<br><strong>■ 棒状 必要個数</strong><br>';
+        beamSpecs.forEach(function(s) {
+          var totalM = ((s.total_mm || 0) / 1000).toFixed(2);
+          var leftM = ((s.leftover_mm || 0) / 1000).toFixed(2);
+          var leftStr = (s.leftover_mm || 0) > 0 ? ' / 余り ' + leftM + ' m' : '';
+          html += '・' + (s.material_name || s.material_id || '').replace(/</g, '&lt;') + ': ' + (s.beams_needed || 0) + ' 本必要（総延長 ' + totalM + ' m / 規格 ' + (s.unit_len_mm || 0) + ' mm）' + leftStr + '<br>';
+        });
+      }
+      var boardSpecs = stats.board_specs || [];
+      if (boardSpecs.length > 0) {
+        html += '<br><strong>■ 面状 必要個数</strong><br>';
+        boardSpecs.forEach(function(s) {
+          var leftStr = (s.leftover_m2 || 0) > 0 ? ' / 余り ' + (s.leftover_m2 || 0).toFixed(4) + ' m²' : '';
+          html += '・' + (s.material_name || s.material_id || '').replace(/</g, '&lt;') + ': ' + (s.sheets_needed || 0) + ' 枚必要（総面積 ' + (s.total_m2 || 0) + ' m² / 規格板 ' + (s.sheet_m2 || 0) + ' m²）' + leftStr + '<br>';
+        });
+      }
+      var finishSpecs = stats.finish_specs || [];
+      if (finishSpecs.length > 0) {
+        html += '<br><strong>■ 仕上材 必要個数</strong><br>';
+        finishSpecs.forEach(function(s) {
+          var leftStr = (s.leftover_m2 || 0) > 0 ? ' / 余り ' + (s.leftover_m2 || 0).toFixed(4) + ' m²' : '';
+          html += '・' + (s.finish_name || s.finish_id || '').replace(/</g, '&lt;') + ': ' + (s.units_needed || 0) + ' 個必要（総面積 ' + (s.total_m2 || 0) + ' m²）' + leftStr + '<br>';
+        });
+      }
+      html += '<br><strong>■ 合計金額</strong> ¥' + (stats.total_price || 0).toLocaleString();
+      el.innerHTML = html;
+    }
+
+    function updatePrice(input) {
+      var id = input.getAttribute('data-id');
+      var val = Math.floor(parseFloat(input.value) || 0);
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_price === 'function') {
+          bridge.update_price(JSON.stringify({ id: id, price: val.toString() }));
+        }
+      } catch(e) {}
+    }
+
+    function updateMemo(input) {
+      var id = input.getAttribute('data-id');
+      var val = input.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_memo === 'function') {
+          bridge.update_memo(JSON.stringify({ id: id, memo: val }));
+        }
+      } catch(e) {}
+    }
+
+    function updateName(input) {
+      var id = input.getAttribute('data-id');
+      var val = input.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_name === 'function') {
+          bridge.update_name(JSON.stringify({ id: id, name: val }));
+        }
+      } catch(e) {}
+    }
+
+    function updateShapeTypeById(id, val) {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_shape_type === 'function') {
+          bridge.update_shape_type(JSON.stringify({ id: id, shape_type: val }));
+        }
+      } catch(e) {}
+    }
+
+    function toggleShapeMenu(btn) {
+      var menu = btn.nextElementSibling;
+      if (!menu || !menu.classList) return;
+      var open = document.querySelectorAll('.shape-dropdown-menu.show');
+      for (var i = 0; i < open.length; i++) {
+        if (open[i] !== menu) open[i].classList.remove('show');
+      }
+      menu.classList.toggle('show');
+    }
+
+    function selectShapeOption(optEl) {
+      var id = optEl.getAttribute('data-id');
+      var val = optEl.getAttribute('data-val');
+      if (!id || !val) return;
+      var dropdown = optEl.closest('.shape-dropdown');
+      if (dropdown) {
+        var menu = dropdown.querySelector('.shape-dropdown-menu');
+        if (menu) menu.classList.remove('show');
+        var btn = dropdown.querySelector('.shape-dropdown-btn');
+        if (btn) {
+          var icons = { beam: 'icon_beam.png', board: 'icon_board.png', freeform: 'icon_freeform.png', other: 'icon_other.png' };
+          var src = 'icons/' + (icons[val] || 'icon_other.png');
+          var titles = { beam: '棒', board: '面状', freeform: '自由形状', other: 'その他' };
+          btn.innerHTML = '<img src="' + src + '" class="shape-icon" alt="' + (titles[val] || '') + '" title="' + (titles[val] || '') + '">';
+        }
+      }
+      updateShapeTypeById(id, val);
+    }
+
+
+    function updateMaterial(sel) {
+      var id = sel.getAttribute('data-id');
+      var val = sel.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_material === 'function') {
+          bridge.update_material(JSON.stringify({ id: id, material_id: val }));
+        }
+      } catch(e) {}
+    }
+
+    function updateThickness(sel) {
+      var id = sel.getAttribute('data-id');
+      var val = sel.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_thickness === 'function') {
+          bridge.update_thickness(JSON.stringify({ id: id, thickness_mm: val }));
+        }
+      } catch(e) {}
+      var block = sel.closest('.item-block');
+      if (block) {
+        var matSel = block.querySelector('select[data-field="material_id"]');
+        if (matSel) {
+          var curVal = matSel.value;
+          var boardFiltered = val ? rawBoard.filter(function(r) {
+            var rt = (r.thickness_mm != null ? r.thickness_mm : '').toString();
+            return rt === val || (parseFloat(rt) === parseFloat(val) && !isNaN(parseFloat(val)));
+          }) : rawBoard;
+          var found = boardFiltered.some(function(r) { return (r.material_id || '') === curVal; });
+          var opts = boardFiltered.map(function(r) {
+            var label = (r.name || r.material_id || '').toString().replace(/</g, '&lt;').replace(/"/g, '&quot;');
+            return '<option value="' + (r.material_id || '').toString().replace(/"/g, '&quot;') + '"' + (found && curVal === (r.material_id || '') ? ' selected' : '') + '>' + label + '</option>';
+          }).join('');
+          matSel.innerHTML = '<option value="">下地材</option>' + opts;
+          if (!found && bridge && bridge.update_material) {
+            bridge.update_material(JSON.stringify({ id: id, material_id: '' }));
+          }
+        }
+      }
+    }
+
+    function updateFinish(sel) {
+      var id = sel.getAttribute('data-id');
+      var val = sel.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_finish === 'function') {
+          bridge.update_finish(JSON.stringify({ id: id, finish_id: val }));
+        }
+      } catch(e) {}
+    }
+
+    function updateMaterialName(input) {
+      var id = input.getAttribute('data-id');
+      var val = input.value;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.update_material_name === 'function') {
+          bridge.update_material_name(JSON.stringify({ id: id, material_name: val }));
+        }
+      } catch(e) {}
+    }
+
+    function resetPrice(btn) {
+      var id = btn.getAttribute('data-id');
+      if (!id) return;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.reset_price === 'function') bridge.reset_price(id);
+      } catch(e) {}
+    }
+
+    function toggleVisibility(btn) {
+      var id = btn.getAttribute('data-id');
+      if (!id) return;
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.toggle_visibility === 'function') bridge.toggle_visibility(id);
+      } catch(e) { alert('接続エラー: ' + e); }
+    }
+
+    function syncAllEdits() {
+      try {
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (!bridge) return;
+        var blocks = document.querySelectorAll('.item-block');
+        for (var i = 0; i < blocks.length; i++) {
+          var id = blocks[i].getAttribute('data-id');
+          if (!id) continue;
+          var nameInput = blocks[i].querySelector('.name-input');
+          var memoInput = blocks[i].querySelector('.memo-input');
+          var fields = blocks[i].querySelectorAll('.field input');
+          var priceInput = fields[0];
+        var thickSel = blocks[i].querySelector('select[data-field="thickness_mm"]');
+        var matSel = blocks[i].querySelector('select[data-field="material_id"]');
+        var finSel = blocks[i].querySelector('select[data-field="finish_id"]');
+        var materialNameInput = blocks[i].querySelector('input[placeholder="素材"]');
+        if (nameInput && bridge.update_name) bridge.update_name(JSON.stringify({ id: id, name: nameInput.value }));
+        if (memoInput && bridge.update_memo) bridge.update_memo(JSON.stringify({ id: id, memo: memoInput.value }));
+        if (priceInput && bridge.update_price) bridge.update_price(JSON.stringify({ id: id, price: priceInput.value }));
+        if (thickSel && bridge.update_thickness) bridge.update_thickness(JSON.stringify({ id: id, thickness_mm: thickSel.value }));
+        if (matSel && bridge.update_material) bridge.update_material(JSON.stringify({ id: id, material_id: matSel.value }));
+        if (finSel && bridge.update_finish) bridge.update_finish(JSON.stringify({ id: id, finish_id: finSel.value }));
+          if (materialNameInput && bridge.update_material_name) bridge.update_material_name(JSON.stringify({ id: id, material_name: materialNameInput.value }));
+        }
+      } catch(e) {}
+    }
+
+    function collectEditsPayload() {
+      var edits = {};
+      var blocks = document.querySelectorAll('.item-block');
+      for (var i = 0; i < blocks.length; i++) {
+        var id = blocks[i].getAttribute('data-id');
+        if (!id) continue;
+        var nameInput = blocks[i].querySelector('.name-input');
+        var memoInput = blocks[i].querySelector('.memo-input');
+        var fields = blocks[i].querySelectorAll('.field input');
+        var priceInput = fields[0];
+        var thickSel = blocks[i].querySelector('select[data-field="thickness_mm"]');
+        var matSel = blocks[i].querySelector('select[data-field="material_id"]');
+        var finSel = blocks[i].querySelector('select[data-field="finish_id"]');
+        var materialNameInput = blocks[i].querySelector('input[placeholder="素材"]');
+        edits[id] = {
+          name: nameInput ? nameInput.value : '',
+          price: priceInput ? Math.floor(parseFloat(priceInput.value) || 0) : 0,
+          memo: memoInput ? memoInput.value : '',
+          material_id: matSel ? matSel.value : '',
+          thickness_mm: thickSel ? thickSel.value : '',
+          finish_id: finSel ? finSel.value : '',
+          material_name: materialNameInput ? materialNameInput.value : ''
+        };
+      }
+      return JSON.stringify(edits);
+    }
+
+    function saveProject() {
+      try {
+        var editsJson = collectEditsPayload();
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.save_project === 'function') bridge.save_project(editsJson);
+        else alert('保存機能が利用できません');
+      } catch(e) { alert('保存エラー: ' + e); }
+    }
+
+    function saveProjectAs() {
+      try {
+        var editsJson = collectEditsPayload();
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.save_project_as === 'function') bridge.save_project_as(editsJson);
+        else alert('別名保存機能が利用できません');
+      } catch(e) { alert('保存エラー: ' + e); }
+    }
+
+    function saveCsv() {
+      try {
+        var editsJson = collectEditsPayload();
+        var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+        if (bridge && typeof bridge.save_csv === 'function') bridge.save_csv(editsJson);
+        else alert('CSV保存機能が利用できません');
+      } catch(e) { alert('保存エラー: ' + e); }
+    }
+
+    function checkUpdate() {
+      var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
+      if (bridge && typeof bridge.check_update === 'function') bridge.check_update();
+      else alert('アップデート確認が利用できません');
+    }
+
+    function onListUpdated(payload) {
+      var items = [];
+      var highlightIds = [];
+      var rawBeamOpts = [];
+      var rawBoardOpts = [];
+      var finishOpts = [];
+      var thicknessOpts = [];
+      var expandedIdsParam = expandedIds;
+      try {
+        if (payload && Array.isArray(payload.items)) {
+          items = payload.items;
+          highlightIds = Array.isArray(payload.highlightIds) ? payload.highlightIds : [];
+          rawBeamOpts = payload.rawBeam || [];
+          rawBoardOpts = payload.rawBoard || [];
+          finishOpts = payload.finishList || [];
+          thicknessOpts = payload.thicknessOptions || [];
+          if (Array.isArray(payload.selectedIds)) selectedIds = payload.selectedIds;
+          if (Array.isArray(payload.expandedIds) && payload.expandedIds.length > 0) {
+            expandedIds = expandedIds.concat(payload.expandedIds).filter(function(v,i,a){ return a.indexOf(v)===i; });
+            expandedIdsParam = expandedIds;
+          }
+          if (payload.version) {
+            var titleEl = document.getElementById('panelTitle');
+            if (titleEl) titleEl.textContent = 'M List v' + payload.version + ' - リスト';
+          }
+        }
+      } catch(e) {}
+      renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam);
+      updateSelectionVisual();
+      fetchSelectionStats();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+finish_id,name,finish_type,unit_size,unit_price,m2_coverage_per_unit,1m2_price,loss_rate
+waterpaint_urethane_clear,和信ペイント 水性ウレタンニス 各種,paint,4kg,6000,20,300,0
+waterpaint_white,日本ペイント エコフラット60 白,paint,20kg,7500,70,107,0
+waterpaint_color,一般的な水性塗料(色有り/調色品),paint,16kg,12000,60,200,0
+lacquer_spray,アサヒペン 高耐久ラッカースプレー 各色,paint,300ml,800,0.8,1000,0
+sheet_cutting_regular,中川ケミカル カッティングシート レギュラー 各色,sheet,1010mmx50cm,1375,0.5,2750,0
