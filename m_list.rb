@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 # M List - 見積もりプラグイン（自動リスト取得・材料割り振り・価格計算）
-# Version 1.1.2
+# Version 1.1.3
 
 require 'sketchup.rb'
 require 'json'
@@ -18,7 +18,7 @@ require 'set'
 # require_relative 'm_list/csv_handler'
 
 module MList
-  VERSION = "1.1.2"
+  VERSION = "1.1.3"
   EXT_NAME = "M List"
   DICT = "m_list"
 
