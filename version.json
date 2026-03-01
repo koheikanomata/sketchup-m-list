@@ -1,1 +1,28 @@
-{"version":"1.1.3","download_url":"https://github.com/koheikanomata/sketchup-m-list/releases/latest","release_notes":"ツールバーを整理し、「その他」ドロップダウンでサブ機能を集約しました。"}
+{
+  "version": "1.1.4",
+  "download_url": "https://github.com/koheikanomata/sketchup-m-list/releases/latest",
+  "release_notes": "アップデート確認時に「今すぐ自動更新」を選択すると、SketchUp 内で自動インストールできるようになりました。",
+  "files": [
+    "m_list.rb",
+    "m_list/CHANGELOG.md",
+    "m_list/README.md",
+    "m_list/constants.rb",
+    "m_list/csv_handler.rb",
+    "m_list/entity_utils.rb",
+    "m_list/icons/icon_beam.png",
+    "m_list/icons/icon_board.png",
+    "m_list/icons/icon_calculator.png",
+    "m_list/icons/icon_freeform.png",
+    "m_list/icons/icon_nested.png",
+    "m_list/icons/icon_other.png",
+    "m_list/list_manager.rb",
+    "m_list/materials.rb",
+    "m_list/materials_beam.csv",
+    "m_list/materials_board.csv",
+    "m_list/materials_finish.csv",
+    "m_list/panel.html",
+    "m_list/price_calculator.rb",
+    "m_list/shape_classifier.rb",
+    "m_list/version.json.sample"
+  ]
+}

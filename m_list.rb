@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 # M List - 見積もりプラグイン（自動リスト取得・材料割り振り・価格計算）
-# Version 1.1.3
+# Version 1.1.4
 
 require 'sketchup.rb'
 require 'json'
@@ -18,13 +18,14 @@ require 'set'
 # require_relative 'm_list/csv_handler'
 
 module MList
-  VERSION = "1.1.3"
+  VERSION = "1.1.4"
   EXT_NAME = "M List"
   DICT = "m_list"
 
   # オンラインアップデート用
   UPDATE_CHECK_URL = "https://raw.githubusercontent.com/koheikanomata/sketchup-m-list/main/version.json"
   UPDATE_DOWNLOAD_URL = "https://github.com/koheikanomata/sketchup-m-list/releases/latest"
+  UPDATE_RAW_BASE = "https://raw.githubusercontent.com/koheikanomata/sketchup-m-list/main/"
   # 自動チェック間隔（秒）2週間 = 1209600
   UPDATE_CHECK_INTERVAL = 1_209_600
   UPDATE_CHECK_PREF_KEY = "m_list_last_update_check"
@@ -1128,6 +1129,50 @@ module MList
     (Time.now.to_i - last_update_check_time) >= UPDATE_CHECK_INTERVAL
   end
 
+  # ファイルをダウンロードして Plugins にインストール（自動更新）
+  def self.download_and_install_update(files, remote_version)
+    plugins_dir = File.dirname(__FILE__)
+    base_url = (UPDATE_RAW_BASE || "").to_s.strip
+    if base_url.empty?
+      UI.messagebox("自動更新の設定がありません。ダウンロードページから手動で更新してください。")
+      return
+    end
+    base_url += "/" unless base_url.end_with?("/")
+
+    index_ref = [0]
+    total = files.size
+
+    download_next = lambda do
+      if index_ref[0] >= total
+        UI.start_timer(0, false) { UI.messagebox("M List を #{remote_version} に更新しました。\n\nSketchUp を再起動してください。") }
+        return
+      end
+      file = files[index_ref[0]].to_s.strip
+      next if file.empty?
+      url = base_url + file.gsub(" ", "%20")
+      dest = File.join(plugins_dir, file)
+      req = Sketchup::Http::Request.new(url, Sketchup::Http::GET)
+      req.start do |_request, response|
+        if response && response.respond_to?(:status_code) && response.status_code == 200
+          body = response.body
+          if body && !body.to_s.empty?
+            FileUtils.mkdir_p(File.dirname(dest))
+            File.open(dest, "wb") { |f| f.write(body.respond_to?(:to_str) ? body.to_str : body.to_s) }
+          end
+        else
+          UI.start_timer(0, false) { UI.messagebox("ダウンロード失敗: #{file}\n\nダウンロードページから手動で更新してください。") }
+          return
+        end
+        index_ref[0] += 1
+        download_next.call
+      end
+    rescue StandardError => e
+      UI.start_timer(0, false) { UI.messagebox("更新エラー: #{e.message}\n\nダウンロードページから手動で更新してください。") }
+    end
+
+    download_next.call
+  end
+
   # オンラインでバージョンを確認し、新しいバージョンがあれば通知
   def self.check_for_updates(manual: false)
     return if UPDATE_CHECK_URL.to_s.strip.empty? || UPDATE_CHECK_URL.include?("example.com")
@@ -1162,9 +1207,19 @@ module MList
         msg = "M List の新しいバージョン（#{remote_version}）が利用可能です。\n\n"
         msg += "現在のバージョン: #{VERSION}\n\n"
         msg += "#{release_notes}\n\n" unless release_notes.empty?
-        msg += "ダウンロードページを開きますか？"
+        msg += "今すぐ自動更新しますか？\n（完了後、SketchUpを再起動してください）\n\n"
+        msg += "[はい] 自動更新\n[いいえ] ダウンロードページを開く"
         result = UI.messagebox(msg, MB_YESNO)
-        UI.openURL(download_url) if result == 6 # IDYES
+        if result == 6 # IDYES
+          files = (data["files"] || data[:files] || [] rescue [])
+          if files.is_a?(Array) && files.any?
+            download_and_install_update(files, remote_version)
+          else
+            UI.openURL(download_url)
+          end
+        else
+          UI.openURL(download_url)
+        end
       elsif manual
         UI.messagebox("M List は最新バージョン（#{VERSION}）です。")
       end

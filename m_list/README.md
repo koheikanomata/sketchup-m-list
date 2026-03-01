@@ -2,7 +2,7 @@
 
 SketchUp の Group / Component から自動で部材リストを取得し、材料割り振り・価格計算・集計を行うプラグインです。
 
-**Version 1.1.3**
+**Version 1.1.4**
 
 ---
 
