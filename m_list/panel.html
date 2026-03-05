@@ -80,6 +80,9 @@
     .dropdown-menu a:hover { background: #f5f5f5; }
     #toolsMenu { min-width: 120px; }
     .list-row.hidden-row { opacity: 0.5; background: #f5f5f5; }
+    .list-row.shape-changed { background: #ffebee; }
+    .list-row.shape-changed:hover { background: #ffcdd2; }
+    .list-row.user-override { border-left: 3px solid #ff9800; }
     .icon-btn.visibility-btn:hover { background: #e3f2fd; color: #1565c0; }
     .info-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; user-select: none; }
     .info-header:hover { color: #1565c0; }
@@ -93,7 +96,7 @@
   </style>
 </head>
 <body>
-  <h2 id="panelTitle">M List v1.1.4 - リスト</h2>
+  <h2 id="panelTitle">M List v1.1.5 - リスト</h2>
   <div class="toolbar">
     <button class="btn" onclick="syncFromModel()" style="background:#e3f2fd;color:#1565c0" title="モデルからリストを再構築">同期</button>
     <div class="save-dropdown">
@@ -154,10 +157,12 @@
       return '<img src="icons/' + icons[key] + '" class="shape-icon" alt="' + titles[key] + '" title="' + titles[key] + '">';
     }
 
-    function renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam) {
+    function renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam, shapeChangedIdsParam, userOverrideIdsParam) {
       var body = document.getElementById('listBody');
       var ids = (highlightIds || []).map(function(x) { return String(x); });
       var expIds = (expandedIdsParam && expandedIdsParam.length > 0 ? expandedIdsParam : expandedIds).map(function(x) { return String(x); });
+      var shapeChangedIds = (shapeChangedIdsParam || []).map(function(x) { return String(x); });
+      var userOverrideIds = (userOverrideIdsParam || []).map(function(x) { return String(x); });
       rawBeam = rawBeamOpts || [];
       rawBoard = rawBoardOpts || [];
       finishList = finishOpts || [];
@@ -185,7 +190,9 @@
         var tag = (it.tag || '').toString().replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         var tagHtml = tag ? '<span class="tag-badge" title="' + tag + '">' + tag + '</span>' : '';
         var hidden = it.hidden ? true : false;
-        var rowClass = (isChild ? 'list-row child-row' : 'list-row') + hl + sel + (hidden ? ' hidden-row' : '');
+        var shapeChanged = shapeChangedIds.indexOf(id) >= 0 ? ' shape-changed' : '';
+        var userOverride = userOverrideIds.indexOf(id) >= 0 ? ' user-override' : '';
+        var rowClass = (isChild ? 'list-row child-row' : 'list-row') + hl + sel + (hidden ? ' hidden-row' : '') + shapeChanged + userOverride;
         var materialId = (it.material_id || '').toString();
         var finishId = (it.finish_id || '').toString();
         var thicknessMm = (it.thickness_mm || '').toString();
@@ -304,8 +311,12 @@
     function recalculateAndValidate() {
       try {
         var bridge = window.sketchup || (typeof sketchup !== 'undefined' ? sketchup : null);
-        if (bridge && typeof bridge.recalculate_and_validate === 'function') bridge.recalculate_and_validate('');
-        else alert('再計算機能が利用できません');
+        if (!bridge || typeof bridge.reassign_from_shape !== 'function') {
+          alert('再計算機能が利用できません');
+          return;
+        }
+        var includeOverrides = confirm('ユーザーが手動で上書きした項目も再計算しますか？\n\n[OK] はい（上書き項目も含める）\n[キャンセル] いいえ（上書き項目はスキップ）');
+        bridge.reassign_from_shape(includeOverrides ? 'true' : 'false');
       } catch(e) { alert('接続エラー: ' + e); }
     }
 
@@ -721,6 +732,8 @@
       var finishOpts = [];
       var thicknessOpts = [];
       var expandedIdsParam = expandedIds;
+      var shapeChangedIdsParam = [];
+      var userOverrideIdsParam = [];
       try {
         if (payload && Array.isArray(payload.items)) {
           items = payload.items;
@@ -729,6 +742,8 @@
           rawBoardOpts = payload.rawBoard || [];
           finishOpts = payload.finishList || [];
           thicknessOpts = payload.thicknessOptions || [];
+          shapeChangedIdsParam = Array.isArray(payload.shapeChangedIds) ? payload.shapeChangedIds : [];
+          userOverrideIdsParam = Array.isArray(payload.userOverrideIds) ? payload.userOverrideIds : [];
           if (Array.isArray(payload.selectedIds)) selectedIds = payload.selectedIds;
           if (Array.isArray(payload.expandedIds) && payload.expandedIds.length > 0) {
             expandedIds = expandedIds.concat(payload.expandedIds).filter(function(v,i,a){ return a.indexOf(v)===i; });
@@ -740,7 +755,7 @@
           }
         }
       } catch(e) {}
-      renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam);
+      renderList(items, highlightIds, rawBeamOpts, rawBoardOpts, finishOpts, thicknessOpts, expandedIdsParam, shapeChangedIdsParam, userOverrideIdsParam);
       updateSelectionVisual();
       fetchSelectionStats();
     }

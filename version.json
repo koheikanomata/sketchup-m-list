@@ -1,7 +1,7 @@
 {
-  "version": "1.1.4",
+  "version": "1.1.5",
   "download_url": "https://github.com/koheikanomata/sketchup-m-list/releases/latest",
-  "release_notes": "アップデート確認時に「今すぐ自動更新」を選択すると、SketchUp 内で自動インストールできるようになりました。",
+  "release_notes": "ダイナミックコンポーネントの panel_thickness 対応、bounds 変化時の自動再計算、Hidden エンティティの除外を追加しました。",
   "files": [
     "m_list.rb",
     "m_list/CHANGELOG.md",

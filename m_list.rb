@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 # M List - 見積もりプラグイン（自動リスト取得・材料割り振り・価格計算）
-# Version 1.1.4
+# Version 1.1.5
 
 require 'sketchup.rb'
 require 'json'
@@ -18,7 +18,7 @@ require 'set'
 # require_relative 'm_list/csv_handler'
 
 module MList
-  VERSION = "1.1.4"
+  VERSION = "1.1.5"
   EXT_NAME = "M List"
   DICT = "m_list"
 
@@ -42,6 +42,8 @@ module MList
   ATTR_MEMO = "memo"
   ATTR_SHAPE_TYPE = "shape_type"
   ATTR_HIDDEN = "hidden"
+  ATTR_PRICE_OVERRIDE = "price_override"
+  ATTR_LAST_CALC_BOUNDS = "last_calc_bounds"
   BOARD_THICKNESS_MAX_MM = 60
   BOARD_MIN_DIM_MM = 80
   BOARD_THICKNESS_RATIO_MAX = 0.5
@@ -104,6 +106,14 @@ module MList
     h = bb.height.to_mm.round
     d = bb.depth.to_mm.round
     "#{w} x #{h} x #{d} mm"
+  end
+
+  # bounds の署名文字列（形状変化検出用）。形式: "幅,高さ,奥行"（mm、昇順ソート）
+  def self.bounds_signature(entity)
+    return nil unless entity&.respond_to?(:bounds)
+    dims = [entity.bounds.width.to_mm, entity.bounds.height.to_mm, entity.bounds.depth.to_mm].sort
+    return nil if dims[0] <= 0 || dims[1] <= 0 || dims[2] <= 0
+    "#{dims[0].round},#{dims[1].round},#{dims[2].round}"
   end
 
   def self.list_items
@@ -334,8 +344,17 @@ module MList
       .sort_by { |r| board_prefer_1220x2440?(r) ? 0 : 1 }
   end
 
-  # 板材エンティティの厚み(mm)＝boundsの最小寸法
-  def self.board_thickness_mm(entity)
+  # ダイナミックコンポーネントの panel_thickness を取得（cm → mm）。無ければ nil
+  def self.dc_panel_thickness_mm(entity, parent_entity = nil)
+    val = (entity.get_attribute("dynamic_attributes", "panel_thickness", nil) rescue nil)
+    val = (parent_entity.get_attribute("dynamic_attributes", "panel_thickness", nil) rescue nil) if (val.nil? || val.to_f <= 0) && parent_entity
+    (val && val.to_f > 0) ? (val.to_f * 10) : nil  # cm → mm
+  end
+
+  # 板材エンティティの厚み(mm)。DC の panel_thickness を優先、なければ bounds の最小寸法
+  def self.board_thickness_mm(entity, parent_entity = nil)
+    dc_mm = dc_panel_thickness_mm(entity, parent_entity)
+    return dc_mm if dc_mm && dc_mm > 0
     return nil unless entity&.respond_to?(:bounds)
     bb = entity.bounds
     dims = [bb.width.to_mm, bb.height.to_mm, bb.depth.to_mm].sort
@@ -343,8 +362,8 @@ module MList
   end
 
   # 厚みが最も近い板材の { material_id, thickness_mm } を返す（同一厚み優先、1220x2440 優先）
-  def self.find_best_board_match_by_thickness(entity)
-    target_mm = board_thickness_mm(entity)
+  def self.find_best_board_match_by_thickness(entity, parent_entity = nil)
+    target_mm = board_thickness_mm(entity, parent_entity)
     return nil unless target_mm && target_mm > 0
     candidates = raw_board_options.map do |r|
       row_mm = parse_board_thickness_mm(r)
@@ -391,8 +410,8 @@ module MList
     {}
   end
 
-  # マージ: エンティティ属性 > CSV > 既定値
-  def self.merge_for_update(old_item, new_item, csv_data, entity = nil)
+  # マージ: エンティティ属性 > CSV > 既定値。parent_entity は DC の panel_thickness 参照用
+  def self.merge_for_update(old_item, new_item, csv_data, entity = nil, parent_entity = nil)
     id = new_item[:id].to_s
     csv_row = csv_data&.dig(id)
 
@@ -408,6 +427,9 @@ module MList
       new_item[:memo] = entity.get_attribute(DICT, ATTR_MEMO, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row ? csv_row[:memo].to_s.strip : (old_item&.dig(:memo).to_s || ""))
       hidden_val = entity.get_attribute(DICT, ATTR_HIDDEN, false)
       new_item[:hidden] = hidden_val == true || hidden_val.to_s.downcase == "true" || hidden_val == 1
+      new_item[:price_override] = entity.get_attribute(DICT, ATTR_PRICE_OVERRIDE, false) == true
+      new_item[:last_calc_bounds] = entity.get_attribute(DICT, ATTR_LAST_CALC_BOUNDS, "").to_s.strip
+      new_item[:last_calc_bounds] = nil if new_item[:last_calc_bounds].empty?
       # 形状: ユーザーが属性で上書きしていればそれを優先（入れ子は構造で固定のため除外）
       unless new_item[:children]&.any?
         attr_shape = entity.get_attribute(DICT, ATTR_SHAPE_TYPE, "").to_s.strip
@@ -424,6 +446,8 @@ module MList
       new_item[:price] = (csv_row ? csv_row[:price].to_f : (old_item&.dig(:price).to_f || 0)).round
       new_item[:memo] = csv_row ? csv_row[:memo].to_s.strip : (old_item&.dig(:memo).to_s || "")
       new_item[:hidden] = old_item&.dig(:hidden) ? true : false
+      new_item[:price_override] = false
+      new_item[:last_calc_bounds] = nil
     end
 
     # 棒材で下地材が未選択の場合、断面サイズから自動マッチング
@@ -432,10 +456,10 @@ module MList
       new_item[:material_id] = match[:material_id] if match
     end
 
-    # 板材で厚み・下地材が未選択の場合、モデルから自動抽出・選択
+    # 板材で厚み・下地材が未選択の場合、モデルから自動抽出・選択（DC の panel_thickness を優先）
     if new_item[:shape_type] == "board" && entity
       if new_item[:thickness_mm].to_s.strip.empty?
-        model_mm = board_thickness_mm(entity)
+        model_mm = board_thickness_mm(entity, parent_entity)
         if model_mm && model_mm > 0
           # 厚みを自動設定（選択肢に近いものを探す）
           opts = board_thickness_options
@@ -444,7 +468,7 @@ module MList
         end
       end
       if new_item[:material_id].to_s.strip.empty?
-        match = find_best_board_match_by_thickness(entity)
+        match = find_best_board_match_by_thickness(entity, parent_entity)
         if match
           new_item[:material_id] = match[:material_id]
           new_item[:thickness_mm] = match[:thickness_mm].to_s if new_item[:thickness_mm].to_s.strip.empty?
@@ -452,17 +476,44 @@ module MList
       end
     end
 
-    # 価格計算（棒・面状で材料が割り当てられている場合）
-    if %w[beam board].include?(new_item[:shape_type]) && new_item[:price].to_f <= 0
+    # 価格計算（棒・面状）。bounds 変化時も再計算（DC の板厚変更など）
+    bounds_changed = false
+    if entity && new_item[:last_calc_bounds].to_s.strip != "" && !new_item[:price_override]
+      current_sig = bounds_signature(entity)
+      bounds_changed = (current_sig && new_item[:last_calc_bounds] != current_sig)
+    end
+    need_recalc = new_item[:price].to_f <= 0 || bounds_changed
+
+    if %w[beam board].include?(new_item[:shape_type]) && need_recalc && entity
+      # bounds 変化時は板厚・素材を再マッチ（DC の panel_thickness 変更対応）
+      if new_item[:shape_type] == "board" && bounds_changed
+        model_mm = board_thickness_mm(entity, parent_entity)
+        if model_mm && model_mm > 0
+          opts = board_thickness_options
+          nearest = opts.min_by { |t| (t - model_mm).abs } if opts.any?
+          new_item[:thickness_mm] = nearest.to_s if nearest
+        end
+        match = find_best_board_match_by_thickness(entity, parent_entity)
+        if match
+          new_item[:material_id] = match[:material_id]
+          new_item[:thickness_mm] = match[:thickness_mm].to_s if new_item[:thickness_mm].to_s.strip.empty?
+        end
+      end
       calc = compute_price_for_item(new_item, entity)
-      new_item[:price] = calc.round if calc && calc > 0
+      if calc && calc > 0
+        new_item[:price] = calc.round
+        if entity.respond_to?(:set_attribute)
+          entity.set_attribute(DICT, ATTR_LAST_CALC_BOUNDS, bounds_signature(entity).to_s)
+          entity.set_attribute(DICT, ATTR_PRICE_OVERRIDE, false)
+        end
+      end
     end
 
     return unless new_item[:children]&.any?
     new_item[:children].each do |new_c|
       old_c = (old_item&.dig(:children) || []).find { |o| o[:id].to_s == new_c[:id].to_s }
       child_entity = entity && find_entity_by_pid(new_c[:id])
-      merge_for_update(old_c, new_c, csv_data, child_entity)
+      merge_for_update(old_c, new_c, csv_data, child_entity, entity)
     end
   end
 
@@ -670,9 +721,12 @@ module MList
   end
 
   # ---------- 形状判定 ----------
-  def self.collect_children(entity)
+  # exclude_hidden: true のとき Show_Legs 等で非表示の子をスキップ（価格集計に含めない）
+  def self.collect_children(entity, exclude_hidden: false)
     entities = entity.is_a?(Sketchup::Group) ? entity.entities : entity.definition.entities
-    entities.select { |e| e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance) }
+    children = entities.select { |e| e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance) }
+    children = children.reject { |e| e.respond_to?(:hidden?) && e.hidden? } if exclude_hidden
+    children
   end
 
   def self.board_like?(e)
@@ -1037,7 +1091,7 @@ module MList
 
   def self.build_list_item_tree(e)
     item = build_list_item(e)
-    children = collect_children(e).map { |child| build_list_item_tree(child) }
+    children = collect_children(e, exclude_hidden: true).map { |child| build_list_item_tree(child) }
     item[:children] = children if children.any?
     if children.empty?
       item[:shape_type] = determine_shape_type(e)
@@ -1238,67 +1292,21 @@ module MList
     end
   end
 
-  # 再計算: 葉の価格を材料・仕上材から算出し、親を子の合計に合わせ、検証して警告を返す
-  def self.recalculate_and_validate
-    return { fixed_count: 0, warnings: [] } if list_items.empty? || !model
-    fixed_count = 0
+  # 検証警告を収集（reassign_from_shape と共有）
+  def self.collect_validation_warnings(items = list_items, path_prefix = "")
     warnings = []
-
-    if model
-      model.start_operation("再計算", true)
-      begin
-    # 1. 葉（beam/board）の価格を再計算
-    recalc_leaf_prices = lambda do |items|
-      items.each do |it|
-        if it[:children]&.any?
-          recalc_leaf_prices.call(it[:children])
-          next
-        end
-        next if it[:hidden]
-        next unless %w[beam board].include?(it[:shape_type].to_s)
-        entity = find_entity_by_pid(it[:id])
-        next unless entity
-        calc = compute_price_for_item(it, entity)
-        next unless calc && calc > 0
-        new_price = calc.round
-        old_price = (it[:price] || 0).to_f.round
-        next if new_price == old_price
-        it[:price] = new_price
-        entity.set_attribute(DICT, ATTR_PRICE, new_price) if entity.respond_to?(:set_attribute)
-        fixed_count += 1
-      end
-    end
-    recalc_leaf_prices.call(list_items)
-
-    # 2. 親の価格を子の合計に伝播
-    propagate_nested_prices!(list_items)
-
-    # 3. 親の価格をエンティティに反映（入れ子の親も属性を持つ場合）
-    persist_nested_prices_to_entities = lambda do |items|
-      items.each do |it|
-        persist_nested_prices_to_entities.call(it[:children] || []) if it[:children]&.any?
-        entity = find_entity_by_pid(it[:id])
-        entity&.set_attribute(DICT, ATTR_PRICE, (it[:price] || 0).to_f.round) if entity&.respond_to?(:set_attribute)
-      end
-    end
-    persist_nested_prices_to_entities.call(list_items)
-
-    # 4. 検証して警告を収集
-    collect_validation_warnings = lambda do |items, path_prefix|
-      items.each do |it|
+    collect = lambda do |its, prefix|
+      its.each do |it|
         next if it[:hidden]
         name = (it[:name] || "").to_s.strip
         name = "（無名）" if name.empty?
-        path = path_prefix.empty? ? name : "#{path_prefix} > #{name}"
+        path = prefix.empty? ? name : "#{prefix} > #{name}"
 
         if it[:children]&.any?
-          # 親: 子の合計と一致するか確認（propagate と同じロジック）
           child_sum = it[:children].sum { |c| (c[:price] || 0).to_f }.round
           parent_price = (it[:price] || 0).to_f.round
-          if parent_price != child_sum
-            warnings << { type: "parent_mismatch", path: path, msg: "親の値段(¥#{parent_price})が子の合計(¥#{child_sum})と一致していません" }
-          end
-          collect_validation_warnings.call(it[:children], path)
+          warnings << { type: "parent_mismatch", path: path, msg: "親の値段(¥#{parent_price})が子の合計(¥#{child_sum})と一致していません" } if parent_price != child_sum
+          collect.call(it[:children], path)
           next
         end
 
@@ -1349,13 +1357,113 @@ module MList
         end
       end
     end
-    collect_validation_warnings.call(list_items, "")
+    collect.call(items, path_prefix)
+    warnings
+  end
 
-        model.commit_operation
-      rescue StandardError
-        model.abort_operation
-        raise
+  # 形状から再当て込み: 形状を再判定し、価格を再計算。include_overrides=false のときはユーザー上書き項目をスキップ
+  def self.reassign_from_shape(include_overrides: true)
+    return { fixed_count: 0, warnings: [] } if list_items.empty? || !model
+    fixed_count = 0
+    warnings = []
+
+    model.start_operation("形状から再当て込み", true)
+    begin
+      reassign_leaf = lambda do |items, parent_entity = nil|
+        items.each do |it|
+          if it[:children]&.any?
+            parent_ent = find_entity_by_pid(it[:id])
+            reassign_leaf.call(it[:children], parent_ent)
+            next
+          end
+          next if it[:hidden]
+          entity = find_entity_by_pid(it[:id])
+          next unless entity
+
+          # 上書き項目をスキップ（include_overrides=false の場合）
+          unless include_overrides
+            next if entity.get_attribute(DICT, ATTR_PRICE_OVERRIDE, false) == true
+          end
+
+          # 形状を再判定（入れ子は除く）
+          new_shape = determine_shape_type(entity)
+          old_shape = it[:shape_type].to_s
+
+          # 形状タイプが変わった場合: material_id / thickness_mm / finish_id をクリア
+          if new_shape != old_shape
+            it[:material_id] = ""
+            it[:thickness_mm] = ""
+            it[:finish_id] = ""
+            it[:material_name] = ""
+            entity.set_attribute(DICT, ATTR_MATERIAL_ID, "")
+            entity.set_attribute(DICT, ATTR_THICKNESS_MM, "")
+            entity.set_attribute(DICT, ATTR_FINISH_ID, "")
+            entity.set_attribute(DICT, ATTR_MATERIAL_NAME, "")
+          end
+
+          it[:shape_type] = new_shape
+          entity.set_attribute(DICT, ATTR_SHAPE_TYPE, new_shape) if entity.respond_to?(:set_attribute)
+
+          # beam/board の場合: 素材が未選択なら自動マッチ（DC の panel_thickness を優先）、価格を再計算
+          if %w[beam board].include?(new_shape)
+            if new_shape == "beam" && it[:material_id].to_s.strip.empty?
+              match = find_best_beam_match_by_section(entity)
+              it[:material_id] = match[:material_id] if match
+            end
+            if new_shape == "board"
+              if it[:thickness_mm].to_s.strip.empty?
+                model_mm = board_thickness_mm(entity, parent_entity)
+                opts = board_thickness_options
+                nearest = opts.min_by { |t| (t - model_mm).abs } if model_mm && opts.any?
+                it[:thickness_mm] = nearest.to_s if nearest
+              end
+              if it[:material_id].to_s.strip.empty?
+                match = find_best_board_match_by_thickness(entity, parent_entity)
+                if match
+                  it[:material_id] = match[:material_id]
+                  it[:thickness_mm] = match[:thickness_mm].to_s if it[:thickness_mm].to_s.strip.empty?
+                end
+              end
+            end
+
+            calc = compute_price_for_item(it, entity)
+            if calc && calc > 0
+              new_price = calc.round
+              it[:price] = new_price
+              entity.set_attribute(DICT, ATTR_PRICE, new_price)
+              sig = bounds_signature(entity)
+              entity.set_attribute(DICT, ATTR_LAST_CALC_BOUNDS, sig.to_s) if sig
+              entity.set_attribute(DICT, ATTR_PRICE_OVERRIDE, false)
+              fixed_count += 1
+            end
+          end
+        end
       end
+      reassign_leaf.call(list_items)
+
+      propagate_nested_prices!(list_items)
+
+      persist_to_entities = lambda do |items|
+        items.each do |it|
+          persist_to_entities.call(it[:children] || []) if it[:children]&.any?
+          entity = find_entity_by_pid(it[:id])
+          next unless entity&.respond_to?(:set_attribute)
+          entity.set_attribute(DICT, ATTR_PRICE, (it[:price] || 0).to_f.round)
+          entity.set_attribute(DICT, ATTR_SHAPE_TYPE, it[:shape_type].to_s) if it[:shape_type]
+          entity.set_attribute(DICT, ATTR_MATERIAL_ID, (it[:material_id] || "").to_s)
+          entity.set_attribute(DICT, ATTR_THICKNESS_MM, (it[:thickness_mm] || "").to_s)
+          entity.set_attribute(DICT, ATTR_FINISH_ID, (it[:finish_id] || "").to_s)
+          entity.set_attribute(DICT, ATTR_MATERIAL_NAME, (it[:material_name] || "").to_s)
+        end
+      end
+      persist_to_entities.call(list_items)
+
+      warnings = collect_validation_warnings
+
+      model.commit_operation
+    rescue StandardError
+      model.abort_operation
+      raise
     end
 
     { fixed_count: fixed_count, warnings: warnings }
@@ -1609,6 +1717,9 @@ module MList
           entity.set_attribute(DICT, ATTR_THICKNESS_MM, it[:thickness_mm])
           entity.set_attribute(DICT, ATTR_FINISH_ID, it[:finish_id])
           entity.set_attribute(DICT, ATTR_MATERIAL_NAME, it[:material_name])
+          entity.set_attribute(DICT, ATTR_PRICE_OVERRIDE, false)
+          sig = bounds_signature(entity)
+          entity.set_attribute(DICT, ATTR_LAST_CALC_BOUNDS, sig.to_s) if sig
         end
         count_ref[0] += 1
       end
@@ -1666,6 +1777,47 @@ module MList
     end
   end
 
+  # 形状変化した項目のID一覧（葉のみ。last_calc_bounds と現在 bounds を比較）
+  def self.detect_shape_changed_ids
+    result = []
+    collect_ids_shape_changed = lambda do |items|
+      items.each do |it|
+        next if it[:hidden]
+        if it[:children]&.any?
+          collect_ids_shape_changed.call(it[:children])
+          next
+        end
+        next if (it[:price] || 0).to_f <= 0
+        entity = find_entity_by_pid(it[:id])
+        next unless entity
+        stored = entity.get_attribute(DICT, ATTR_LAST_CALC_BOUNDS, "").to_s.strip
+        next if stored.empty?
+        next unless stored.match?(/^\d+,\d+,\d+$/)
+        current = bounds_signature(entity)
+        next unless current
+        result << it[:id].to_s if current != stored
+      end
+    end
+    collect_ids_shape_changed.call(list_items)
+    result
+  end
+
+  # ユーザーが手動で価格を上書きした項目のID一覧
+  def self.detect_user_override_ids
+    result = []
+    collect_ids_user_override = lambda do |items|
+      items.each do |it|
+        next if it[:hidden]
+        collect_ids_user_override.call(it[:children] || [])
+        entity = find_entity_by_pid(it[:id])
+        next unless entity
+        result << it[:id].to_s if entity.get_attribute(DICT, ATTR_PRICE_OVERRIDE, false) == true
+      end
+    end
+    collect_ids_user_override.call(list_items)
+    result
+  end
+
   def self.refresh_panel(highlight_ids: [], selected_ids: nil, expanded_ids: nil)
     return unless @dialog && @dialog.visible?
     propagate_nested_prices!(list_items)
@@ -1676,6 +1828,8 @@ module MList
     thickness_opts = board_thickness_options.map { |t| t.to_s }
     payload = {
       items: items, highlightIds: highlight_ids || [],
+      shapeChangedIds: detect_shape_changed_ids,
+      userOverrideIds: detect_user_override_ids,
       rawBeam: raw_beam, rawBoard: raw_board, finishList: finish_list,
       thicknessOptions: thickness_opts,
       version: VERSION
@@ -1745,6 +1899,9 @@ module MList
     price_int = calc.round
     update_item_in_tree(list_items, id.to_s, :price, price_int)
     entity.set_attribute(DICT, ATTR_PRICE, price_int)
+    entity.set_attribute(DICT, ATTR_PRICE_OVERRIDE, false)
+    sig = bounds_signature(entity)
+    entity.set_attribute(DICT, ATTR_LAST_CALC_BOUNDS, sig.to_s) if sig
     refresh_panel
   end
 
@@ -1760,7 +1917,12 @@ module MList
       h = JSON.parse(payload)
       update_item_in_tree(list_items, h["id"], :price, ((h["price"] || 0).to_f).round)
       entity = find_entity_by_pid(h["id"])
-      entity&.set_attribute(DICT, ATTR_PRICE, ((h["price"] || 0).to_f).round)
+      if entity&.respond_to?(:set_attribute)
+        entity.set_attribute(DICT, ATTR_PRICE, ((h["price"] || 0).to_f).round)
+        entity.set_attribute(DICT, ATTR_PRICE_OVERRIDE, true)
+        sig = bounds_signature(entity)
+        entity.set_attribute(DICT, ATTR_LAST_CALC_BOUNDS, sig.to_s) if sig
+      end
       propagate_nested_prices!(list_items)
       refresh_panel
     end
@@ -1817,8 +1979,9 @@ module MList
     @dialog.add_action_callback("save_project_as") { |_ctx, edits_json| save_project_as(edits_json) }
     @dialog.add_action_callback("save_csv") { |_ctx, edits_json| save_csv(edits_json) }
     @dialog.add_action_callback("reload_materials_csv") { reload_materials_from_project_folder }
-    @dialog.add_action_callback("recalculate_and_validate") do
-      result = recalculate_and_validate
+    @dialog.add_action_callback("reassign_from_shape") do |_ctx, include_overrides_str|
+      inc = include_overrides_str.to_s.strip.downcase == "true"
+      result = reassign_from_shape(include_overrides: inc)
       refresh_panel
       json = result.to_json
       @dialog.execute_script("if(typeof onRecalculateComplete==='function')onRecalculateComplete(#{json});")
