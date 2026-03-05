@@ -1,1 +1,1 @@
-{"version":"1.1.5","download_url":"https://github.com/koheikanomata/sketchup-m-list/releases/latest","release_notes":"ダイナミックコンポーネントの panel_thickness 対応、bounds 変化時の自動再計算、Hidden エンティティの除外を追加しました。"}
+{"version":"1.1.6","download_url":"https://github.com/koheikanomata/sketchup-m-list/releases/latest","release_notes":"棒状判定の改善（斜め・カット対応）、板材のサイズ自動マッチ、Entity Info の Price 優先、DC 板厚同期の修正、形状判定デバッグ機能を追加。Extensions メニューを整理しました。"}

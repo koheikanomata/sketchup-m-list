@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 # M List - 見積もりプラグイン（自動リスト取得・材料割り振り・価格計算）
-# Version 1.1.5
+# Version 1.1.6
 
 require 'sketchup.rb'
 require 'json'
@@ -18,7 +18,7 @@ require 'set'
 # require_relative 'm_list/csv_handler'
 
 module MList
-  VERSION = "1.1.5"
+  VERSION = "1.1.6"
   EXT_NAME = "M List"
   DICT = "m_list"
 
@@ -44,11 +44,14 @@ module MList
   ATTR_HIDDEN = "hidden"
   ATTR_PRICE_OVERRIDE = "price_override"
   ATTR_LAST_CALC_BOUNDS = "last_calc_bounds"
+  ENTITY_INFO_DICT = "SU_DefinitionSet"
+  ENTITY_INFO_PRICE_KEY = "Price"
   BOARD_THICKNESS_MAX_MM = 60
   BOARD_MIN_DIM_MM = 80
   BOARD_THICKNESS_RATIO_MAX = 0.5
   BEAM_MIN_D_MM = 5
   BEAM_ASPECT_RATIO_MIN = 2.5
+  BEAM_DIAGONAL_EDGE_RATIO_MAX = 1.1  # 板との区別: diagonal > longest_edge * これ なら板寄り（1820×910×6 板で 2034/1820≈1.12）
   FREEFORM_MIN_FACE_COUNT = 6
 
   def self.plugin_root
@@ -114,6 +117,17 @@ module MList
     dims = [entity.bounds.width.to_mm, entity.bounds.height.to_mm, entity.bounds.depth.to_mm].sort
     return nil if dims[0] <= 0 || dims[1] <= 0 || dims[2] <= 0
     "#{dims[0].round},#{dims[1].round},#{dims[2].round}"
+  end
+
+  # Entity Info の Advanced Attributes > Price（SU_DefinitionSet）を取得。無ければ nil
+  def self.entity_info_price(entity)
+    return nil unless entity
+    defn = entity.respond_to?(:definition) ? entity.definition : nil
+    return nil unless defn&.respond_to?(:get_attribute)
+    val = defn.get_attribute(ENTITY_INFO_DICT, ENTITY_INFO_PRICE_KEY, nil) rescue nil
+    return nil if val.nil? || val.to_s.strip.empty?
+    f = val.to_s.strip.to_f
+    f > 0 ? f : nil
   end
 
   def self.list_items
@@ -334,6 +348,17 @@ module MList
     sz.match?(/1220\s*[xX×]\s*2440|2440\s*[xX×]\s*1220/)
   end
 
+  # 板材CSVのunit_size（910x1820）から [短辺mm, 長辺mm] を取得
+  def self.parse_board_dims(row)
+    return nil unless row
+    sz = (row["unit_size"] || "").to_s.strip
+    m = sz.match(/^(\d+\.?\d*)\s*[xX×]\s*(\d+\.?\d*)$/)
+    return nil unless m
+    a, b = m[1].to_f, m[2].to_f
+    return nil if a <= 0 || b <= 0
+    [a, b].sort
+  end
+
   # 指定厚みの板材のみ抽出（1220x2440 を優先して先頭に）
   def self.board_options_by_thickness(thickness_mm)
     return [] if thickness_mm.nil? || thickness_mm.to_s.strip.empty?
@@ -361,21 +386,29 @@ module MList
     dims[0] > 0 ? dims[0] : nil
   end
 
-  # 厚みが最も近い板材の { material_id, thickness_mm } を返す（同一厚み優先、1220x2440 優先）
+  # 厚み・サイズが最も近い板材の { material_id, thickness_mm } を返す
   def self.find_best_board_match_by_thickness(entity, parent_entity = nil)
     target_mm = board_thickness_mm(entity, parent_entity)
     return nil unless target_mm && target_mm > 0
+    target_dims = board_dims_mm(entity)
     candidates = raw_board_options.map do |r|
       row_mm = parse_board_thickness_mm(r)
       next nil unless row_mm && row_mm > 0
-      diff = (row_mm - target_mm).abs
-      prefer = board_prefer_1220x2440?(r) ? 0 : 1
-      { material_id: r["material_id"].to_s.strip, thickness_mm: row_mm, diff: diff, exact: (diff < 0.01), prefer_1220: prefer }
+      row_dims = parse_board_dims(r)
+      thickness_diff = (row_mm - target_mm).abs
+      thickness_exact = thickness_diff < 0.01
+      size_diff = 999_999
+      fits = true
+      if target_dims && target_dims[0] > 0 && target_dims[1] > 0 && row_dims && row_dims[0] > 0 && row_dims[1] > 0
+        fits = row_dims[0] >= target_dims[0] && row_dims[1] >= target_dims[1]
+        size_diff = fits ? (row_dims[0] - target_dims[0]) + (row_dims[1] - target_dims[1]) : 999_999
+      end
+      prefer_1220 = board_prefer_1220x2440?(r) ? 0 : 1
+      { material_id: r["material_id"].to_s.strip, thickness_mm: row_mm, thickness_diff: thickness_diff, thickness_exact: thickness_exact, size_diff: size_diff, fits: fits, prefer_1220: prefer_1220 }
     end.compact
     return nil if candidates.empty?
-    exact = candidates.select { |c| c[:exact] }
-    pool = exact.any? ? exact : candidates
-    best = pool.min_by { |c| [c[:diff], c[:prefer_1220]] }
+    # 厚み一致優先 → サイズが収まる優先 → サイズ差小（無駄少） → 1220x2440 優先
+    best = candidates.min_by { |c| [c[:thickness_exact] ? 0 : 1, c[:thickness_diff], c[:fits] ? 0 : 1, c[:size_diff], c[:prefer_1220]] }
     { material_id: best[:material_id], thickness_mm: best[:thickness_mm] }
   end
 
@@ -421,13 +454,24 @@ module MList
       new_item[:material_id] = entity.get_attribute(DICT, ATTR_MATERIAL_ID, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row&.dig(:material_id) || old_item&.dig(:material_id) || "")
       new_item[:finish_id] = entity.get_attribute(DICT, ATTR_FINISH_ID, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row&.dig(:finish_id) || old_item&.dig(:finish_id) || "")
       new_item[:material_name] = entity.get_attribute(DICT, ATTR_MATERIAL_NAME, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row&.dig(:material_name) || old_item&.dig(:material_name) || "")
-      new_item[:name] = entity.get_attribute(DICT, ATTR_NAME, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row ? csv_row[:name].to_s.strip : (old_item&.dig(:name).to_s || ""))
-      price_attr = entity.get_attribute(DICT, ATTR_PRICE, -999)
-      new_item[:price] = ((price_attr != -999 && price_attr >= 0 ? price_attr.to_f : nil) || (csv_row ? csv_row[:price].to_f : (old_item&.dig(:price).to_f || 0))).to_f.round
+      attr_name = entity.get_attribute(DICT, ATTR_NAME, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t }
+      csv_or_old = csv_row ? csv_row[:name].to_s.strip : (old_item&.dig(:name).to_s || "")
+      skp_name = entity_name(entity)
+      skp_name = nil if skp_name.to_s.empty? || ["(無名コンポーネント)", "Group"].include?(skp_name)
+      new_item[:name] = attr_name || (csv_or_old.empty? ? nil : csv_or_old) || skp_name.to_s.strip || ""
+      # Entity Info の Price を最優先（入れ子でも中の素材価格は無視）
+      ei_price = entity_info_price(entity)
+      if ei_price && ei_price > 0
+        new_item[:price] = ei_price.round
+        new_item[:price_override] = true
+      else
+        price_attr = entity.get_attribute(DICT, ATTR_PRICE, -999)
+        new_item[:price] = ((price_attr != -999 && price_attr >= 0 ? price_attr.to_f : nil) || (csv_row ? csv_row[:price].to_f : (old_item&.dig(:price).to_f || 0))).to_f.round
+        new_item[:price_override] = entity.get_attribute(DICT, ATTR_PRICE_OVERRIDE, false) == true
+      end
       new_item[:memo] = entity.get_attribute(DICT, ATTR_MEMO, "").to_s.strip.then { |s| (t = s.to_s.strip).empty? ? nil : t } || (csv_row ? csv_row[:memo].to_s.strip : (old_item&.dig(:memo).to_s || ""))
       hidden_val = entity.get_attribute(DICT, ATTR_HIDDEN, false)
       new_item[:hidden] = hidden_val == true || hidden_val.to_s.downcase == "true" || hidden_val == 1
-      new_item[:price_override] = entity.get_attribute(DICT, ATTR_PRICE_OVERRIDE, false) == true
       new_item[:last_calc_bounds] = entity.get_attribute(DICT, ATTR_LAST_CALC_BOUNDS, "").to_s.strip
       new_item[:last_calc_bounds] = nil if new_item[:last_calc_bounds].empty?
       # 形状: ユーザーが属性で上書きしていればそれを優先（入れ子は構造で固定のため除外）
@@ -456,23 +500,18 @@ module MList
       new_item[:material_id] = match[:material_id] if match
     end
 
-    # 板材で厚み・下地材が未選択の場合、モデルから自動抽出・選択（DC の panel_thickness を優先）
+    # 板材: 常にモデル（DC panel_thickness / bounds）から厚み・素材を取得（DC Redraw 後の2回目同期で古い値になる問題を回避）
     if new_item[:shape_type] == "board" && entity
-      if new_item[:thickness_mm].to_s.strip.empty?
-        model_mm = board_thickness_mm(entity, parent_entity)
-        if model_mm && model_mm > 0
-          # 厚みを自動設定（選択肢に近いものを探す）
-          opts = board_thickness_options
-          nearest = opts.min_by { |t| (t - model_mm).abs } if opts.any?
-          new_item[:thickness_mm] = nearest.to_s if nearest
-        end
+      model_mm = board_thickness_mm(entity, parent_entity)
+      if model_mm && model_mm > 0
+        opts = board_thickness_options
+        nearest = opts.min_by { |t| (t - model_mm).abs } if opts.any?
+        new_item[:thickness_mm] = nearest.to_s if nearest
       end
-      if new_item[:material_id].to_s.strip.empty?
-        match = find_best_board_match_by_thickness(entity, parent_entity)
-        if match
-          new_item[:material_id] = match[:material_id]
-          new_item[:thickness_mm] = match[:thickness_mm].to_s if new_item[:thickness_mm].to_s.strip.empty?
-        end
+      match = find_best_board_match_by_thickness(entity, parent_entity)
+      if match
+        new_item[:material_id] = match[:material_id]
+        new_item[:thickness_mm] = match[:thickness_mm].to_s if new_item[:thickness_mm].to_s.strip.empty?
       end
     end
 
@@ -485,20 +524,7 @@ module MList
     need_recalc = new_item[:price].to_f <= 0 || bounds_changed
 
     if %w[beam board].include?(new_item[:shape_type]) && need_recalc && entity
-      # bounds 変化時は板厚・素材を再マッチ（DC の panel_thickness 変更対応）
-      if new_item[:shape_type] == "board" && bounds_changed
-        model_mm = board_thickness_mm(entity, parent_entity)
-        if model_mm && model_mm > 0
-          opts = board_thickness_options
-          nearest = opts.min_by { |t| (t - model_mm).abs } if opts.any?
-          new_item[:thickness_mm] = nearest.to_s if nearest
-        end
-        match = find_best_board_match_by_thickness(entity, parent_entity)
-        if match
-          new_item[:material_id] = match[:material_id]
-          new_item[:thickness_mm] = match[:thickness_mm].to_s if new_item[:thickness_mm].to_s.strip.empty?
-        end
-      end
+      # 板は上で常にモデルから厚み・素材を取得済み
       calc = compute_price_for_item(new_item, entity)
       if calc && calc > 0
         new_item[:price] = calc.round
@@ -741,14 +767,62 @@ module MList
       thickness / dim1 < BOARD_THICKNESS_RATIO_MAX
   end
 
+  # エンティティ内の全エッジ長を取得（変換適用で斜め配置・スケールに対応）
+  def self.edge_lengths_mm(entity)
+    return [] unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+    ents = entity.is_a?(Sketchup::Group) ? entity.entities : entity.definition.entities
+    tr = entity.transformation
+    ents.grep(Sketchup::Edge).map { |ed| ed.length(tr).to_mm }
+  end
+
+  # AABB の対角線長（斜め・細分割棒の長さ推定用）
+  def self.bounds_diagonal_mm(entity)
+    return 0 unless entity&.respond_to?(:bounds)
+    bb = entity.bounds
+    w = bb.width.to_mm
+    h = bb.height.to_mm
+    d = bb.depth.to_mm
+    Math.sqrt(w * w + h * h + d * d)
+  end
+
+  # 棒の有効長さ（斜め配置・Follow Me 細分割対応）
+  def self.effective_beam_length_mm(entity)
+    lengths = edge_lengths_mm(entity)
+    longest_edge = lengths.any? ? lengths.max : 0
+    diagonal = bounds_diagonal_mm(entity)
+    [longest_edge, diagonal].max
+  end
+
+  # くさび（三角柱）かどうか。5面かつ最小面積面が3角形
+  def self.wedge_like?(entity)
+    return false unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+    return false if collect_children(entity).any?
+    return false unless face_count(entity) == 5
+    ents = entity.is_a?(Sketchup::Group) ? entity.entities : entity.definition.entities
+    tr = entity.transformation
+    faces = ents.grep(Sketchup::Face)
+    return false if faces.empty?
+    min_face = faces.min_by { |f| f.area(tr).abs }
+    min_face.edges.size == 3
+  end
+
   def self.beam_like?(e)
     return false unless e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance)
     return false if collect_children(e).any?
+    return false if wedge_like?(e)
+    return false unless e.respond_to?(:bounds)
     bb = e.bounds
     dims = [bb.width.to_mm, bb.height.to_mm, bb.depth.to_mm].sort
-    min_d, mid_d, max_d = dims[0], dims[1], dims[2]
-    return false if mid_d <= 0
-    min_d >= BEAM_MIN_D_MM && max_d / mid_d >= BEAM_ASPECT_RATIO_MIN
+    min_d = dims[0]
+    return false if min_d <= 0
+    lengths = edge_lengths_mm(e)
+    longest_edge = lengths.any? ? lengths.max : 0
+    diagonal = bounds_diagonal_mm(e)
+    effective_len = [longest_edge, diagonal].max
+    return false if effective_len <= 0
+    # 板との区別: 板は対角線が最長エッジより大きい（平たい面を斜めに横切る）
+    return false if longest_edge > 0 && diagonal > longest_edge * BEAM_DIAGONAL_EDGE_RATIO_MAX
+    min_d >= BEAM_MIN_D_MM && effective_len / min_d >= BEAM_ASPECT_RATIO_MIN
   end
 
   def self.face_count(entity)
@@ -761,13 +835,29 @@ module MList
   end
 
   def self.beam_length_mm(entity)
-    return 0 unless entity.respond_to?(:bounds)
-    [entity.bounds.width.to_mm, entity.bounds.height.to_mm, entity.bounds.depth.to_mm].max
+    effective_beam_length_mm(entity)
   end
 
   # 棒材エンティティの断面サイズ [幅mm, 高さmm]（長さ以外の2辺、昇順）
+  # 斜め配置・斜めカット対応: 最小面積面のエッジ長から取得、なければ最長以外の2辺
   def self.beam_section_mm(entity)
-    return nil unless entity&.respond_to?(:bounds)
+    return nil unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+    ents = entity.is_a?(Sketchup::Group) ? entity.entities : entity.definition.entities
+    tr = entity.transformation
+    faces = ents.grep(Sketchup::Face)
+    if faces.any?
+      min_face = faces.min_by { |f| f.area(tr).abs }
+      edge_lens = min_face.edges.map { |ed| ed.length(tr).to_mm }.uniq.sort
+      return edge_lens[0, 2] if edge_lens.size >= 2 && edge_lens[0] > 0 && edge_lens[1] > 0
+    end
+    lengths = edge_lengths_mm(entity)
+    if lengths.size >= 2
+      sorted = lengths.sort
+      longest = sorted.last
+      short_edges = sorted[0...-1].select { |l| l < longest * 0.6 }
+      return short_edges.max(2).sort if short_edges.size >= 2
+      return [sorted[0], sorted[1]] if sorted[0] > 0 && sorted[1] > 0
+    end
     dims = [entity.bounds.width.to_mm, entity.bounds.height.to_mm, entity.bounds.depth.to_mm].sort
     return nil if dims[0] <= 0 || dims[1] <= 0
     [dims[0], dims[1]]
@@ -808,12 +898,18 @@ module MList
     dims[1] * dims[2]
   end
 
-  # 板材の縦横サイズキー（短辺x長辺 mm）
-  def self.board_dims_key(entity)
+  # 板材の縦横サイズ [短辺mm, 長辺mm]（厚み以外の2辺）
+  def self.board_dims_mm(entity)
     return nil unless entity&.respond_to?(:bounds)
     dims = [entity.bounds.width.to_mm, entity.bounds.height.to_mm, entity.bounds.depth.to_mm].sort
     return nil if dims[1] <= 0 || dims[2] <= 0
-    "#{dims[1].round}×#{dims[2].round}"
+    [dims[1], dims[2]]
+  end
+
+  # 板材の縦横サイズキー（短辺x長辺 mm）
+  def self.board_dims_key(entity)
+    d = board_dims_mm(entity)
+    d ? "#{d[0].round}×#{d[1].round}" : nil
   end
 
   # 選択IDのうち、他選択の子孫でないものだけ返す（二重カウント防止）
@@ -1089,6 +1185,78 @@ module MList
     "other"
   end
 
+  # 形状判定デバッグ: 選択オブジェクトの判定根拠を Ruby コンソールに出力
+  def self.debug_shape_info(entity)
+    return nil unless entity.is_a?(Sketchup::Group) || entity.is_a?(Sketchup::ComponentInstance)
+    bb = entity.respond_to?(:bounds) ? entity.bounds : nil
+    dims = bb ? [bb.width.to_mm, bb.height.to_mm, bb.depth.to_mm].sort : []
+    lengths = edge_lengths_mm(entity)
+    longest_edge = lengths.any? ? lengths.max : 0
+    diagonal = bounds_diagonal_mm(entity)
+    fc = face_count(entity)
+    wedge = wedge_like?(entity)
+    beam = beam_like?(entity)
+    board = board_like?(entity)
+    result = determine_shape_type(entity)
+    {
+      name: entity_name(entity),
+      type: entity.class.name,
+      has_children: collect_children(entity).any?,
+      face_count: fc,
+      bounds_mm: dims,
+      thickness: dims[0],
+      dim1: dims[1],
+      dim2: dims[2],
+      longest_edge_mm: longest_edge.round(2),
+      diagonal_mm: diagonal.round(2),
+      diagonal_vs_edge: longest_edge > 0 ? (diagonal / longest_edge).round(3) : nil,
+      wedge_like: wedge,
+      beam_like: beam,
+      board_like: board,
+      board_checks: bb && dims[1] > 0 ? {
+        thickness_ok: dims[0] >= 0 && dims[0] <= BOARD_THICKNESS_MAX_MM,
+        dim1_ok: dims[1] >= BOARD_MIN_DIM_MM,
+        dim2_ok: dims[2] >= BOARD_MIN_DIM_MM,
+        ratio_ok: (dims[0] / dims[1]) < BOARD_THICKNESS_RATIO_MAX,
+        ratio: (dims[0] / dims[1]).round(4)
+      } : nil,
+      beam_checks: bb && dims[0] > 0 ? {
+        min_d_ok: dims[0] >= BEAM_MIN_D_MM,
+        diagonal_edge_ok: longest_edge <= 0 || diagonal <= longest_edge * BEAM_DIAGONAL_EDGE_RATIO_MAX,
+        effective_len: [longest_edge, diagonal].max.round(2),
+        aspect_ok: (dims[0] > 0 && (eff = [longest_edge, diagonal].max) > 0) ? ((eff / dims[0]) >= BEAM_ASPECT_RATIO_MIN) : false,
+        aspect_ratio: dims[0] > 0 ? ([longest_edge, diagonal].max / dims[0]).round(2) : nil
+      } : nil,
+      result: result
+    }
+  end
+
+  def self.debug_shape_log(entity)
+    info = debug_shape_info(entity)
+    return unless info
+    puts "\n=== M List 形状判定デバッグ ==="
+    puts "名前: #{info[:name]}"
+    puts "結果: #{info[:result]}"
+    puts "bounds [厚, 幅, 長] mm: #{info[:bounds_mm]&.map { |d| d.round(2) }}"
+    puts "最長エッジ: #{info[:longest_edge_mm]} mm, 対角線: #{info[:diagonal_mm]} mm, 比: #{info[:diagonal_vs_edge]}"
+    puts "面数: #{info[:face_count]}, くさび: #{info[:wedge_like]}"
+    puts "beam_like: #{info[:beam_like]}, board_like: #{info[:board_like]}"
+    puts "板チェック: #{info[:board_checks].inspect}" if info[:board_checks]
+    puts "棒チェック: #{info[:beam_checks].inspect}" if info[:beam_checks]
+    puts "===============================\n"
+  end
+
+  def self.debug_shape_selection
+    sel = model&.selection
+    return unless sel
+    ents = sel.select { |e| e.is_a?(Sketchup::Group) || e.is_a?(Sketchup::ComponentInstance) }
+    if ents.empty?
+      puts "M List デバッグ: Group/Component を選択してください"
+      return
+    end
+    ents.each { |e| debug_shape_log(e) }
+  end
+
   def self.build_list_item_tree(e)
     item = build_list_item(e)
     children = collect_children(e, exclude_hidden: true).map { |child| build_list_item_tree(child) }
@@ -1282,11 +1450,11 @@ module MList
     UI.messagebox("アップデート確認エラー\n#{e.message}") if manual
   end
 
-  # 入れ子状アイテムの価格を子の合計に伝播
+  # 入れ子状アイテムの価格を子の合計に伝播（Entity Info Price が設定されている親は子の合計で上書きしない）
   def self.propagate_nested_prices!(items)
     items.each do |it|
       propagate_nested_prices!(it[:children] || []) if it[:children]&.any?
-      if it[:children]&.any?
+      if it[:children]&.any? && !it[:price_override]
         it[:price] = it[:children].sum { |c| (c[:price] || 0).to_f }.round
       end
     end
@@ -1411,18 +1579,16 @@ module MList
               it[:material_id] = match[:material_id] if match
             end
             if new_shape == "board"
-              if it[:thickness_mm].to_s.strip.empty?
-                model_mm = board_thickness_mm(entity, parent_entity)
+              model_mm = board_thickness_mm(entity, parent_entity)
+              if model_mm && model_mm > 0
                 opts = board_thickness_options
-                nearest = opts.min_by { |t| (t - model_mm).abs } if model_mm && opts.any?
+                nearest = opts.min_by { |t| (t - model_mm).abs } if opts.any?
                 it[:thickness_mm] = nearest.to_s if nearest
               end
-              if it[:material_id].to_s.strip.empty?
-                match = find_best_board_match_by_thickness(entity, parent_entity)
-                if match
-                  it[:material_id] = match[:material_id]
-                  it[:thickness_mm] = match[:thickness_mm].to_s if it[:thickness_mm].to_s.strip.empty?
-                end
+              match = find_best_board_match_by_thickness(entity, parent_entity)
+              if match
+                it[:material_id] = match[:material_id]
+                it[:thickness_mm] = match[:thickness_mm].to_s if it[:thickness_mm].to_s.strip.empty?
               end
             end
 
@@ -2070,7 +2236,6 @@ module MList
     Sketchup.add_observer(AppObserver.new)
     ext_menu = UI.menu("Extensions")
     ext_menu.add_item(EXT_NAME) { show_panel }
-    ext_menu.add_item("#{EXT_NAME} - アップデートを確認") { check_for_updates(manual: true) }
     file_loaded(__FILE__)
   end
 end
